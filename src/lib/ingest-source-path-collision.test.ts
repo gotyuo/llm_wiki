@@ -205,6 +205,38 @@ describe("autoIngest source summary paths", () => {
     expect(content).toContain("project-a config")
   })
 
+  it("does not migrate a legacy basename source summary when the basename is ambiguous", async () => {
+    if (!tmp) throw new Error("missing temp project")
+    sourceMarkers = ["project-a config"]
+
+    const legacySummaryPath = path.join(tmp.path, "wiki", "sources", "config.md")
+    const legacyContent = [
+      "---",
+      'title: "Source: config.yaml"',
+      'sources: ["config.yaml"]',
+      "---",
+      "",
+      "# Legacy config",
+      "",
+      "Ambiguous legacy source summary body.",
+    ].join("\n")
+    await writeFileRaw(legacySummaryPath, legacyContent)
+
+    await autoIngest(
+      tmp.path,
+      `${tmp.path}/raw/sources/project-a/config.yaml`,
+      useWikiStore.getState().llmConfig,
+      undefined,
+      "project-a",
+    )
+
+    const canonicalSummary = `wiki/sources/${sourceSummarySlugFromIdentity("project-a/config.yaml")}.md`
+    const canonicalSummaryPath = path.join(tmp.path, canonicalSummary)
+
+    expect(await fs.readFile(legacySummaryPath, "utf8")).toBe(legacyContent)
+    expect(await fs.readFile(canonicalSummaryPath, "utf8")).toContain("project-a config")
+  })
+
   it("canonicalizes interactive source summary paths and sources frontmatter", async () => {
     if (!tmp) throw new Error("missing temp project")
 

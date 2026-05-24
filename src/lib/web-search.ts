@@ -69,6 +69,12 @@ export function resolveSearchConfig(config: SearchApiConfig): SearchApiConfig {
   }
 
   const activeProvider = config.provider as SearchProvider
+  const activeOverride = activeProvider === "none" ? undefined : providerConfigs[activeProvider]
+  const resolvedOllamaUrl =
+    activeProvider === "ollama"
+      ? activeOverride?.ollamaUrl ?? config.ollamaUrl ?? "https://ollama.com"
+      : providerConfigs.ollama?.ollamaUrl ?? "https://ollama.com"
+
   if (activeProvider === "none") {
     return {
       ...config,
@@ -77,12 +83,11 @@ export function resolveSearchConfig(config: SearchApiConfig): SearchApiConfig {
       serpApiEngine: config.serpApiEngine ?? providerConfigs.serpapi?.serpApiEngine ?? "google",
       searXngUrl: config.searXngUrl ?? providerConfigs.searxng?.searXngUrl ?? "",
       searXngCategories: config.searXngCategories ?? providerConfigs.searxng?.searXngCategories ?? ["general"],
-      ollamaUrl: config.ollamaUrl ?? providerConfigs.ollama?.ollamaUrl ?? "https://ollama.com",
+      ollamaUrl: providerConfigs.ollama?.ollamaUrl ?? "https://ollama.com",
       providerConfigs,
     }
   }
 
-  const activeOverride = providerConfigs[activeProvider]
   return {
     ...config,
     provider: activeProvider,
@@ -90,7 +95,7 @@ export function resolveSearchConfig(config: SearchApiConfig): SearchApiConfig {
     serpApiEngine: activeOverride?.serpApiEngine ?? config.serpApiEngine ?? "google",
     searXngUrl: activeOverride?.searXngUrl ?? config.searXngUrl ?? "",
     searXngCategories: activeOverride?.searXngCategories ?? config.searXngCategories ?? ["general"],
-    ollamaUrl: activeOverride?.ollamaUrl ?? config.ollamaUrl ?? "https://ollama.com",
+    ollamaUrl: resolvedOllamaUrl,
     providerConfigs,
   }
 }
@@ -381,9 +386,7 @@ async function ollamaSearch(
   const headers: Record<string, string> = {
     Accept: "application/json",
     "Content-Type": "application/json",
-  }
-  if (trimmedApiKey) {
-    headers.Authorization = `Bearer ${trimmedApiKey}`
+    Authorization: `Bearer ${trimmedApiKey}`,
   }
 
   const httpFetch = await getHttpFetch()

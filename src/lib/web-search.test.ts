@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { hasConfiguredSearchProvider, webSearch } from "./web-search"
+import { hasConfiguredSearchProvider, resolveSearchConfig, webSearch } from "./web-search"
 
 const fetchMock = vi.fn<typeof fetch>()
 
@@ -196,6 +196,20 @@ describe("webSearch", () => {
         ollama: { ollamaUrl: "https://ollama.com" },
       },
     })).toBe(false)
+  })
+
+  it("does not leak a stale top-level Ollama URL into non-Ollama providers", () => {
+    const resolved = resolveSearchConfig({
+      provider: "serpapi",
+      apiKey: "",
+      ollamaUrl: "http://localhost:11434",
+      providerConfigs: {
+        serpapi: { apiKey: "serp-key" },
+        ollama: { ollamaUrl: "https://ollama.com" },
+      },
+    })
+
+    expect(resolved.ollamaUrl).toBe("https://ollama.com")
   })
 
   it("calls the Ollama Web Search API with Bearer auth", async () => {

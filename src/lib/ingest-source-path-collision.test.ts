@@ -12,6 +12,9 @@ vi.mock("@/commands/fs", () => realFs)
 
 let sourceMarkers: string[] = []
 let failLongChunksOnce = new Set<number>()
+let extraReviewResponse = ""
+let generationSuffix = ""
+let abortDuringReview: AbortController | null = null
 
 vi.mock("./llm-client", () => ({
   streamChat: vi.fn(async (_cfg, messages, cb) => {
@@ -65,6 +68,16 @@ vi.mock("./llm-client", () => ({
       return
     }
 
+    if (systemPrompt.startsWith("You are identifying high-value follow-up research items")) {
+      if (abortDuringReview) {
+        abortDuringReview.abort()
+        throw new Error("AbortError")
+      }
+      cb.onToken(extraReviewResponse)
+      cb.onDone()
+      return
+    }
+
     const targetMatch = systemPrompt.match(
       /source summary page at \*\*(wiki\/sources\/[^*]+)\*\*/,
     )
@@ -89,6 +102,7 @@ vi.mock("./llm-client", () => ({
       "",
       `Configuration details for ${marker}.`,
       "---END FILE---",
+      generationSuffix,
     ].join("\n"))
     cb.onDone()
   }),
@@ -105,6 +119,9 @@ describe("autoIngest source summary paths", () => {
   beforeEach(async () => {
     sourceMarkers = []
     failLongChunksOnce = new Set()
+    extraReviewResponse = ""
+    generationSuffix = ""
+    abortDuringReview = null
     mockStreamChat.mockClear()
     tmp = await createTempProject("same-basename-sources")
 
@@ -369,6 +386,101 @@ describe("autoIngest source summary paths", () => {
       "introduced topic 1",
     )
     await expect(fs.readdir(progressDir)).resolves.toEqual([])
+  })
+
+  it("adds follow-up research reviews from the dedicated review stage", async () => {
+    if (!tmp) throw new Error("missing temp project")
+    sourceMarkers = ["project-a config"]
+    generationSuffix = [
+      "",
+      "---FILE: wiki/concepts/nitrification-inhibition.md---",
+      "---",
+      'title: "Nitrification inhibition"',
+      "---",
+      "",
+      "# Nitrification inhibition",
+      "",
+      "X".repeat(10_500),
+      "---END FILE---",
+    ].join("\n")
+    extraReviewResponse = [
+      "---REVIEW: suggestion | Research nitrification inhibition signals---",
+      "Add follow-up research on early-warning indicators for nitrification inhibition.",
+      "OPTIONS: Create Page | Skip",
+      "SEARCH: nitrification inhibition early warning wastewater | ammonia oxidation inhibition signals | wastewater nitrification process upset indicators",
+      "---END REVIEW---",
+    ].join("\n")
+
+    await autoIngest(
+      tmp.path,
+      `${tmp.path}/raw/sources/project-a/config.yaml`,
+      useWikiStore.getState().llmConfig,
+      undefined,
+      "project-a",
+    )
+
+    const reviews = useReviewStore.getState().items
+    expect(reviews).toHaveLength(1)
+    expect(reviews[0]).toMatchObject({
+      type: "suggestion",
+      title: "Research nitrification inhibition signals",
+    })
+    expect(reviews[0].searchQueries).toEqual([
+      "nitrification inhibition early warning wastewater",
+      "ammonia oxidation inhibition signals",
+      "wastewater nitrification process upset indicators",
+    ])
+  })
+
+  it("parses generation and dedicated review-stage blocks separately", async () => {
+    if (!tmp) throw new Error("missing temp project")
+    sourceMarkers = ["project-a config"]
+    generationSuffix = [
+      "",
+      "---REVIEW: missing-page | Truncated Orphan---",
+      "Partial description that got cut off",
+    ].join("\n")
+    extraReviewResponse = [
+      "---REVIEW: suggestion | Real Follow-up---",
+      "Real description that should not be swallowed by the generation orphan.",
+      "OPTIONS: Create Page | Skip",
+      "SEARCH: real follow up query | second query",
+      "---END REVIEW---",
+    ].join("\n")
+
+    await autoIngest(
+      tmp.path,
+      `${tmp.path}/raw/sources/project-a/config.yaml`,
+      { ...useWikiStore.getState().llmConfig, maxContextSize: 128_000 },
+      undefined,
+      "project-a",
+    )
+
+    const reviews = useReviewStore.getState().items
+    expect(reviews).toHaveLength(1)
+    expect(reviews[0]).toMatchObject({
+      type: "suggestion",
+      title: "Real Follow-up",
+    })
+    expect(reviews[0].description).not.toContain("Truncated Orphan")
+  })
+
+  it("propagates cancellation that happens during the dedicated review stage", async () => {
+    if (!tmp) throw new Error("missing temp project")
+    sourceMarkers = ["project-a config"]
+    generationSuffix = `${"\n"}${"X".repeat(10_500)}`
+    const controller = new AbortController()
+    abortDuringReview = controller
+
+    await expect(
+      autoIngest(
+        tmp.path,
+        `${tmp.path}/raw/sources/project-a/config.yaml`,
+        { ...useWikiStore.getState().llmConfig, maxContextSize: 128_000 },
+        controller.signal,
+        "project-a",
+      ),
+    ).rejects.toThrow("AbortError")
   })
 
   it("canonicalizes interactive source summary paths and sources frontmatter", async () => {

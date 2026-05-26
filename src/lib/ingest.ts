@@ -31,6 +31,12 @@ const LONG_SOURCE_CHUNK_MIN = 12_000
 const LONG_SOURCE_CHUNK_MAX = 60_000
 const LONG_SOURCE_DIGEST_MAX = 15_000
 const LONG_SOURCE_CHUNK_ANALYSIS_MAX = 40_000
+const INGEST_GENERATION_TOKENS_DEFAULT = 8_192
+const INGEST_GENERATION_TOKENS_128K = 16_384
+const INGEST_GENERATION_TOKENS_256K = 24_576
+const INGEST_GENERATION_TOKENS_512K = 32_768
+const REVIEW_STAGE_MIN_SIGNAL_CHARS = 10_000
+const REVIEW_STAGE_MIN_FILE_BLOCKS = 4
 
 interface SourceChunk {
   id: string
@@ -688,12 +694,63 @@ async function autoIngestImpl(
       },
     },
     signal,
-    { temperature: 0.1, reasoning: { mode: "off" }, max_tokens: 8192 },
+    {
+      temperature: 0.1,
+      reasoning: { mode: "off" },
+      max_tokens: computeIngestGenerationMaxTokens(llmConfig.maxContextSize),
+    },
   )
 
   const generationActivity = useActivityStore.getState().items.find((i) => i.id === activityId)
   if (generationActivity?.status === "error") {
     throw new Error(generationActivity.detail || "Generation stream failed")
+  }
+
+  let reviewSuggestionOutput = ""
+  if (!signal?.aborted && shouldRunDedicatedReviewStage(generation)) {
+    let reviewStageHadError = false
+    try {
+      await streamChat(
+        llmConfig,
+        [
+          {
+            role: "system",
+            content: buildReviewSuggestionPrompt(
+              purpose,
+              index,
+              sourceIdentity,
+              analysis,
+              sourceContext,
+              generation,
+              llmConfig.maxContextSize,
+            ),
+          },
+          {
+            role: "user",
+            content: "Emit only high-value REVIEW blocks for follow-up research or unresolved knowledge gaps. Output nothing if there are none.",
+          },
+        ],
+        {
+          onToken: (token) => { reviewSuggestionOutput += token },
+          onDone: () => {},
+          onError: (err) => {
+            reviewStageHadError = true
+            console.warn(`[ingest] Review suggestion generation failed for "${sourceIdentity}": ${err.message}`)
+          },
+        },
+        signal,
+        {
+          temperature: 0.1,
+          reasoning: { mode: "off" },
+          max_tokens: computeIngestReviewMaxTokens(llmConfig.maxContextSize),
+        },
+      )
+    } catch (err) {
+      if (signal?.aborted) throw err
+      console.warn(`[ingest] Review suggestion generation failed for "${sourceIdentity}":`, err)
+    }
+    if (signal?.aborted) throw new Error("Ingest cancelled")
+    if (reviewStageHadError) reviewSuggestionOutput = ""
   }
 
   // ── Step 3: Write files ───────────────────────────────────────
@@ -775,7 +832,10 @@ async function autoIngestImpl(
   }
 
   // ── Step 4: Parse review items ────────────────────────────────
-  const reviewItems = parseReviewBlocks(generation, sp)
+  const reviewItems = [
+    ...parseReviewBlocks(generation, sp),
+    ...parseReviewBlocks(reviewSuggestionOutput, sp),
+  ]
   if (reviewItems.length > 0) {
     useReviewStore.getState().addItems(reviewItems)
   }
@@ -1195,6 +1255,16 @@ function parseReviewBlocks(
   return items
 }
 
+function countFileBlocks(text: string): number {
+  return (text.match(/---FILE:\s*[^-]+---/g) ?? []).length
+}
+
+function shouldRunDedicatedReviewStage(generation: string): boolean {
+  return generation.length >= REVIEW_STAGE_MIN_SIGNAL_CHARS
+    || countFileBlocks(generation) >= REVIEW_STAGE_MIN_FILE_BLOCKS
+    || /---REVIEW:\s*[\w-]+\s*\|[\s\S]*$/i.test(generation)
+}
+
 /**
  * Step 1 prompt: AI reads the source and produces a structured analysis.
  * This is the "discussion" step — the AI reasons about the source before writing wiki pages.
@@ -1402,6 +1472,65 @@ export function buildGenerationPrompt(
   ].filter(Boolean).join("\n")
 }
 
+function buildReviewSuggestionPrompt(
+  purpose: string,
+  index: string,
+  sourceIdentity: string,
+  analysis: string,
+  sourceContext: string,
+  generation: string,
+  maxContextSize: number | undefined,
+): string {
+  const { maxCtx } = computeContextBudget(maxContextSize)
+  const sectionCap = Math.max(4_000, Math.floor(maxCtx * 0.15))
+  const indexCap = Math.max(3_000, Math.floor(sectionCap * 0.8))
+  return [
+    "You are identifying high-value follow-up research items for a personal wiki.",
+    "Do not output chain-of-thought, hidden reasoning, or explanatory preamble.",
+    "",
+    languageRule(sourceContext),
+    "",
+    "Your job is NOT to generate wiki pages. The wiki page generation already happened.",
+    "Output only REVIEW blocks for unresolved knowledge gaps that deserve human attention or Deep Research.",
+    "",
+    "Create REVIEW blocks only for genuinely useful follow-up work:",
+    "- missing-page: an important entity/concept is referenced but still lacks a dedicated page",
+    "- suggestion: a research question, source type, or comparison that would materially improve the wiki",
+    "- contradiction: a conflict or tension that requires user judgment",
+    "- duplicate: likely duplicate pages/names that need user review",
+    "",
+    "Prefer 1-5 high-signal reviews. If there is nothing worth reviewing, output nothing.",
+    "For suggestion and missing-page reviews, include a SEARCH line with 2-3 keyword-rich web search queries separated by ` | `.",
+    "Use only these options: OPTIONS: Create Page | Skip",
+    "",
+    "REVIEW block template:",
+    "```",
+    "---REVIEW: suggestion | Precise title---",
+    "Concise description of the gap and why it matters.",
+    "OPTIONS: Create Page | Skip",
+    "PAGES: wiki/page1.md, wiki/page2.md",
+    "SEARCH: query 1 | query 2 | query 3",
+    "---END REVIEW---",
+    "```",
+    "",
+    "Return REVIEW blocks only. Do not output FILE blocks. Do not wrap the response in markdown fences.",
+    "",
+    purpose ? `## Wiki Purpose\n${purpose}` : "",
+    index ? `## Current Wiki Index\n${trimLongText(index, indexCap)}` : "",
+    "",
+    `## Source\n${sourceIdentity}`,
+    "",
+    "## Stage 1 Analysis",
+    trimLongText(analysis, sectionCap),
+    "",
+    "## Source Context",
+    trimLongText(sourceContext, sectionCap),
+    "",
+    "## Generated Wiki Output",
+    trimLongText(generation, sectionCap),
+  ].filter(Boolean).join("\n")
+}
+
 function getStore() {
   return useChatStore.getState()
 }
@@ -1428,6 +1557,18 @@ export function computeIngestSourceBudget(
   const available = maxCtx - responseReserve - stableReserve - instructionReserve
   const upper = Math.min(LONG_SOURCE_MAX_SINGLE_PASS_BUDGET, Math.max(LONG_SOURCE_MIN_BUDGET, Math.floor(maxCtx * 0.6)))
   return clampNumber(Math.floor(available), LONG_SOURCE_MIN_BUDGET, upper)
+}
+
+export function computeIngestGenerationMaxTokens(maxContextSize: number | undefined): number {
+  const { maxCtx } = computeContextBudget(maxContextSize)
+  if (maxCtx >= 512_000) return INGEST_GENERATION_TOKENS_512K
+  if (maxCtx >= 256_000) return INGEST_GENERATION_TOKENS_256K
+  if (maxCtx >= 128_000) return INGEST_GENERATION_TOKENS_128K
+  return INGEST_GENERATION_TOKENS_DEFAULT
+}
+
+export function computeIngestReviewMaxTokens(maxContextSize: number | undefined): number {
+  return Math.min(8_192, Math.max(4_096, Math.floor(computeIngestGenerationMaxTokens(maxContextSize) / 2)))
 }
 
 function splitOversizedBlock(block: string, targetChars: number): string[] {

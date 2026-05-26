@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest"
 import {
   buildAnalysisPrompt,
   buildGenerationPrompt,
+  computeIngestGenerationMaxTokens,
+  computeIngestReviewMaxTokens,
   computeIngestSourceBudget,
   splitSourceIntoSemanticChunks,
 } from "./ingest"
@@ -100,6 +102,14 @@ describe("analysis + generation prompt consistency", () => {
 })
 
 describe("long-source ingest planning", () => {
+  it("scales generation output tokens with the configured context window", () => {
+    expect(computeIngestGenerationMaxTokens(64_000)).toBe(8_192)
+    expect(computeIngestGenerationMaxTokens(128_000)).toBe(16_384)
+    expect(computeIngestGenerationMaxTokens(256_000)).toBe(24_576)
+    expect(computeIngestGenerationMaxTokens(1_000_000)).toBe(32_768)
+    expect(computeIngestReviewMaxTokens(1_000_000)).toBe(8_192)
+  })
+
   it("scales source budget from the configured context window instead of a fixed 50k cap", () => {
     const small = computeIngestSourceBudget(64_000, 8_000)
     const large = computeIngestSourceBudget(1_000_000, 8_000)

@@ -113,6 +113,41 @@ fn claude_content_blocks(content: &ClaudeContent) -> Vec<serde_json::Value> {
     }
 }
 
+/// Spawn the user's login shell to retrieve the full PATH (which
+/// includes nvm/vfox/volta/fnm/… directories that macOS GUI apps
+/// don't inherit from launchd). Returns `None` on any failure so the
+/// caller can fall back to the process-level PATH.
+#[cfg(not(windows))]
+fn shell_path() -> Option<String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    // `-ilc` = interactive + login so both profile and rc files run,
+    // picking up version-manager init scripts. We print a unique
+    // marker so we can find our line even if the shell prints motd /
+    // banners to stdout.
+    let output = std::process::Command::new(&shell)
+        .args(["-ilc", r#"printf '\x1ePATH=%s\x1e\n' "$PATH""#])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        // Look for the marker-delimited PATH value.
+        if let Some(rest) = line.strip_prefix('\x1e') {
+            if let Some(val) = rest.strip_suffix('\x1e') {
+                if let Some(path) = val.strip_prefix("PATH=") {
+                    if !path.is_empty() {
+                        return Some(path.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 fn find_claude_command() -> Result<PathBuf, String> {
     #[cfg(windows)]
     {
@@ -124,7 +159,23 @@ fn find_claude_command() -> Result<PathBuf, String> {
         }
     }
 
-    which::which("claude").map_err(|_| "`claude` not found on PATH".to_string())
+    if let Ok(path) = which::which("claude") {
+        return Ok(path);
+    }
+
+    // macOS / Linux GUI apps inherit a minimal PATH from launchd /
+    // the display manager. Ask the user's login shell for its full
+    // PATH which includes version-manager directories (nvm, vfox,
+    // volta, fnm, …) and search that instead.
+    #[cfg(not(windows))]
+    if let Some(full_path) = shell_path() {
+        // which::which_in searches the given PATH string.
+        if let Ok(path) = which::which_in("claude", Some(&full_path), ".") {
+            return Ok(path);
+        }
+    }
+
+    Err("`claude` not found on PATH".to_string())
 }
 
 /// Locate `claude` on PATH and confirm it's runnable by calling
@@ -150,7 +201,7 @@ pub async fn claude_cli_detect() -> Result<DetectResult, String> {
         Duration::from_secs(3),
         Command::new(&path).arg("--version").output(),
     )
-    .await;
+        .await;
 
     match output {
         Ok(Ok(out)) if out.status.success() => {
@@ -413,7 +464,7 @@ mod tests {
             { "type": "text", "text": "describe this" },
             { "type": "image", "mediaType": "image/png", "dataBase64": "abc123" }
         ]))
-        .expect("content block payload should deserialize");
+            .expect("content block payload should deserialize");
 
         let blocks = claude_content_blocks(&content);
 
@@ -439,7 +490,7 @@ mod tests {
             { "type": "text", "text": "system rule" },
             { "type": "image", "mediaType": "image/png", "dataBase64": "abc123" }
         ]))
-        .expect("content block payload should deserialize");
+            .expect("content block payload should deserialize");
 
         assert_eq!(claude_content_text_only(&content), "system rule");
     }

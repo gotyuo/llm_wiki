@@ -81,6 +81,7 @@ describe("buildGenerationPrompt language directive", () => {
     )
     expect(prompt).toContain("## Project Schema and Routing (AUTHORITATIVE)")
     expect(prompt).toContain("write pages into those schema-defined folders")
+    expect(prompt).toContain("frontmatter type must match the schema directory")
     expect(prompt).toContain("otherwise use wiki/entities/")
     expect(prompt).not.toContain("Entity pages in wiki/entities/ for key entities")
   })

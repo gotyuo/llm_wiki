@@ -3,14 +3,6 @@ import { useTranslation } from "react-i18next"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import type { SettingsDraft, DraftSetter } from "../settings-types"
 import type { MineruModelVersion } from "@/stores/wiki-store"
 import { testMineruConnection } from "@/lib/mineru"
@@ -54,18 +46,17 @@ export function MineruSection({ draft, setDraft }: Props) {
         </p>
       </div>
 
-      <div className="flex items-center space-x-2">
-        <Checkbox
-          id="mineru-enabled"
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
           checked={draft.mineruEnabled}
-          onCheckedChange={(checked) =>
-            setDraft("mineruEnabled", checked === true)
-          }
+          onChange={(e) => setDraft("mineruEnabled", e.target.checked)}
+          className="h-4 w-4"
         />
-        <Label htmlFor="mineru-enabled">
+        <span className="text-sm">
           {t("settings.mineruEnabled", { defaultValue: "Enable MinerU" })}
-        </Label>
-      </div>
+        </span>
+      </label>
 
       {draft.mineruEnabled && (
         <div className="space-y-4 pl-1">
@@ -91,33 +82,30 @@ export function MineruSection({ draft, setDraft }: Props) {
             <Label htmlFor="mineru-model">
               {t("settings.mineruModel", { defaultValue: "Model Version" })}
             </Label>
-            <Select
+            <select
+              id="mineru-model"
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               value={draft.mineruModelVersion}
-              onValueChange={(v) =>
-                setDraft("mineruModelVersion", v as MineruModelVersion)
+              onChange={(e) =>
+                setDraft("mineruModelVersion", e.target.value as MineruModelVersion)
               }
             >
-              <SelectTrigger id="mineru-model">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="vlm">
-                  {t("settings.mineruModelVlm", {
-                    defaultValue: "VLM (Recommended, best for complex layouts)",
-                  })}
-                </SelectItem>
-                <SelectItem value="pipeline">
-                  {t("settings.mineruModelPipeline", {
-                    defaultValue: "Pipeline (Faster)",
-                  })}
-                </SelectItem>
-                <SelectItem value="mineru-html">
-                  {t("settings.mineruModelHtml", {
-                    defaultValue: "MinerU-HTML",
-                  })}
-                </SelectItem>
-              </SelectContent>
-            </Select>
+              <option value="vlm">
+                {t("settings.mineruModelVlm", {
+                  defaultValue: "VLM (Recommended, best for complex layouts)",
+                })}
+              </option>
+              <option value="pipeline">
+                {t("settings.mineruModelPipeline", {
+                  defaultValue: "Pipeline (Faster)",
+                })}
+              </option>
+              <option value="mineru-html">
+                {t("settings.mineruModelHtml", {
+                  defaultValue: "MinerU-HTML",
+                })}
+              </option>
+            </select>
           </div>
 
           <div className="flex items-center gap-3">

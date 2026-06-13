@@ -114,11 +114,11 @@ const JSON_CONTENT_TYPE = "application/json"
  * `src-tauri/Cargo.toml` lets reqwest forward Origin without
  * stripping it. End-to-end our value wins.
  */
-function localLlmOriginHeader(): Record<string, string> {
+export function localLlmOriginHeader(): Record<string, string> {
   return { Origin: "http://localhost" }
 }
 
-function isLocalOrPrivateHttpEndpoint(endpoint: string): boolean {
+export function isLocalOrPrivateHttpEndpoint(endpoint: string): boolean {
   try {
     const url = new URL(endpoint)
     const host = url.hostname.toLowerCase()

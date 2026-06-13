@@ -27,12 +27,14 @@ import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
 import { getHttpFetch, isFetchNetworkError } from "@/lib/tauri-fetch"
 import { chunkMarkdown, type Chunk } from "@/lib/text-chunker"
+import { isLocalOrPrivateHttpEndpoint, localLlmOriginHeader } from "@/lib/llm-providers"
 
 const RESERVED_EMBEDDING_HEADER_NAMES = new Set([
   "authorization",
   "content-type",
   "host",
   "content-length",
+  "origin",
   "x-goog-api-key",
 ])
 const HTTP_HEADER_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
@@ -109,7 +111,10 @@ export async function fetchEmbedding(
   const endpoint = isGoogleNative
     ? googleEmbeddingEndpoint(cfg)
     : volcengineEmbeddingEndpoint(cfg)
-  const headers: Record<string, string> = { "Content-Type": "application/json" }
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(isLocalOrPrivateHttpEndpoint(endpoint) ? localLlmOriginHeader() : {}),
+  }
   if (cfg.apiKey) {
     if (isGoogleNative) {
       headers["x-goog-api-key"] = cfg.apiKey

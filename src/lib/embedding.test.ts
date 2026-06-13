@@ -241,9 +241,11 @@ describe("fetchEmbedding — provider wire formats", () => {
 
     expect(out).toEqual([0.1, 0.2])
     const [url, opts] = mockHttpFetch.mock.calls[0]
+    const headers = opts?.headers as Record<string, string>
     expect(url).toBe("https://api.openai.com/v1/embeddings")
-    expect((opts?.headers as Record<string, string>).Authorization).toBe("Bearer sk-test")
-    expect((opts?.headers as Record<string, string>)["x-goog-api-key"]).toBeUndefined()
+    expect(headers.Authorization).toBe("Bearer sk-test")
+    expect(headers.Origin).toBeUndefined()
+    expect(headers["x-goog-api-key"]).toBeUndefined()
     expect(JSON.parse(String(opts?.body))).toEqual({
       model: "text-embedding-3-small",
       input: "hi",
@@ -262,13 +264,31 @@ describe("fetchEmbedding — provider wire formats", () => {
 
     expect(out).toEqual([0.3, 0.4])
     const [url, opts] = mockHttpFetch.mock.calls[0]
+    const headers = opts?.headers as Record<string, string>
     expect(url).toBe("http://127.0.0.1:1234/v1/embeddings")
-    expect((opts?.headers as Record<string, string>).Authorization).toBeUndefined()
-    expect((opts?.headers as Record<string, string>)["x-goog-api-key"]).toBeUndefined()
+    expect(headers.Authorization).toBeUndefined()
+    expect(headers.Origin).toBe("http://localhost")
+    expect(headers["x-goog-api-key"]).toBeUndefined()
     expect(JSON.parse(String(opts?.body))).toEqual({
       model: "text-embedding-qwen3-embedding-0.6b",
       input: "hi",
     })
+  })
+
+  it("sends Origin override for LAN embedding endpoints", async () => {
+    mockHttpFetch.mockResolvedValueOnce(okResponse([0.3, 0.4]))
+
+    const out = await fetchEmbedding("hi", {
+      enabled: true,
+      endpoint: "http://192.168.1.20:11434/v1/embeddings",
+      apiKey: "",
+      model: "nomic-embed-text",
+    })
+
+    expect(out).toEqual([0.3, 0.4])
+    const [, opts] = mockHttpFetch.mock.calls[0]
+    const headers = opts?.headers as Record<string, string>
+    expect(headers.Origin).toBe("http://localhost")
   })
 
   it("sends safe custom embedding headers on OpenAI-compatible endpoints", async () => {
@@ -287,6 +307,7 @@ describe("fetchEmbedding — provider wire formats", () => {
         "Content-Type": "text/plain",
         Host: "evil.example.com",
         "Content-Length": "999",
+        Origin: "http://tauri.localhost",
         "x-goog-api-key": "wrong-google-key",
       },
     })
@@ -297,6 +318,7 @@ describe("fetchEmbedding — provider wire formats", () => {
     expect(headers["X-Model-Provider-Id"]).toBe("siliconflow")
     expect(headers.Authorization).toBe("Bearer sk-test")
     expect(headers["Content-Type"]).toBe("application/json")
+    expect(headers.Origin).toBeUndefined()
     expect(headers.Host).toBeUndefined()
     expect(headers["Content-Length"]).toBeUndefined()
     expect(headers["x-goog-api-key"]).toBeUndefined()
@@ -508,6 +530,7 @@ describe("fetchEmbedding — provider wire formats", () => {
     const [, opts] = mockHttpFetch.mock.calls[0]
     const headers = opts?.headers as Record<string, string>
     expect(headers["x-goog-api-key"]).toBe("real-google-key")
+    expect(headers.Origin).toBeUndefined()
     expect(headers["X-Trace-Id"]).toBe("trace-1")
   })
 
